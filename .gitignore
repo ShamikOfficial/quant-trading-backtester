@@ -1,0 +1,80 @@
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+venv.bak/
+.venv.bak/
+
+# Setup Scripts
+*.ps1
+*.sh
+setup_venv.*
+activate_venv.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Data files - exclude large files
+data/raw/
+data/processed/
+data/selections/
+*.csv
+
+# Checkpoints
+checkpoints/
+backtest_results/
+models/
+models_test/
+
+# Environment variables and secrets
+.env
+.env.*
+*.env
+.env.local
+.env.development
+.env.production
+.env.test
+.env.staging
+*.env.local
+*.env.*.local
+secrets.json
+config.json
+.secrets
+.envrc
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
