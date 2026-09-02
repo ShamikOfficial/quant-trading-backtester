@@ -1,6 +1,30 @@
-# Algorithmic Trading System - DSCI 560
+# Quant Trading Backtester
 
-A comprehensive algorithmic trading framework implementing machine learning and technical analysis strategies for quantitative trading.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.8+-blue?style=flat-square&logo=python&logoColor=white)]()
+
+> End-to-end algorithmic trading pipeline — data collection, XGBoost signals, backtesting, and performance analytics.
+
+---
+
+## Problem
+
+Building a quantitative trading strategy requires more than a model — you need reliable data ingestion, feature engineering, signal generation, simulated execution, and rigorous performance evaluation in one reproducible pipeline.
+
+## Solution
+
+A modular Python framework implementing the **Signal → Order → Execute** flow with technical indicators, XGBoost-based ML strategies, and comprehensive backtesting metrics (Sharpe, Sortino, drawdown).
+
+## Key Results
+
+| Component | Capability |
+|-----------|------------|
+| Data collection | API ingestion with checkpoint/resume |
+| Strategies | Technical indicators + XGBoost ML models |
+| Backtesting | Sharpe, Sortino, drawdown analysis |
+| Architecture | Modular `src/` pipeline |
+
+---
 
 ## Features
 
@@ -282,3 +306,11 @@ The system calculates comprehensive performance metrics:
 - **Volatility**: Annualized standard deviation of returns
 - **Win Rate**: Percentage of profitable trades
 - **Profit Factor**: Ratio of gross profit to gross loss
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+---
+
+*Originally developed as USC DSCI 560 coursework — refactored for clarity and portfolio presentation.*
