@@ -6,12 +6,6 @@ ENV/
 venv.bak/
 .venv.bak/
 
-# Setup Scripts
-*.ps1
-*.sh
-setup_venv.*
-activate_venv.*
-
 # Python
 __pycache__/
 *.py[cod]
@@ -19,20 +13,12 @@ __pycache__/
 *.so
 .Python
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # IDE
 .vscode/
@@ -42,39 +28,36 @@ wheels/
 *~
 .DS_Store
 
-# Jupyter Notebook
+# Jupyter
 .ipynb_checkpoints
 
-# Data files - exclude large files
+# Large / generated data
 data/raw/
 data/processed/
 data/selections/
 *.csv
+!data/sample/.gitkeep
 
-# Checkpoints
+# Models / checkpoints / run artifacts
 checkpoints/
 backtest_results/
 models/
 models_test/
 
-# Environment variables and secrets
+# Keep published demo results
+!docs/sample_results/.gitkeep
+!docs/sample_results/latest_demo_summary.json
+!docs/sample_results/*.png
+
+# Secrets
 .env
-.env.*
+!.env.example
 *.env
-.env.local
-.env.development
-.env.production
-.env.test
-.env.staging
-*.env.local
-*.env.*.local
 secrets.json
 config.json
 .secrets
 .envrc
 
-# Logs
+# Logs / OS
 *.log
-
-# OS
 Thumbs.db

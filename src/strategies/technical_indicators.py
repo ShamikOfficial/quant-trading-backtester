@@ -21,11 +21,14 @@ def calculate_sma(closing_price_data: pd.Series, window: int) -> pd.Series:
 
 
 def calculate_ema(closing_price_data: pd.Series, window: int, alpha: Optional[float] = None) -> pd.Series:
-    # Calculate Exponential Moving Average
+    """
+    Calculate Exponential Moving Average (EMA).
+
+    Args:
         closing_price_data: Price series
         window: Number of periods for the moving average
-        alpha: Smoothing factor (optional, calculated from window if not provided)
-        
+        alpha: Smoothing factor (optional; derived from window if not provided)
+
     Returns:
         Series containing EMA values
     """

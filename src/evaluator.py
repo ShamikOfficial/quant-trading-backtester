@@ -2,8 +2,9 @@
 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from src.simulator import MockTrader, Trade
+from src.frequency import resolve_periods_per_year, format_frequency_label
 
 
 def calculate_sharpe_ratio(returns: pd.Series, 
@@ -223,95 +224,82 @@ def calculate_profit_factor(trades: List[Trade]) -> float:
     return gross_profit / gross_loss
 
 
-def generate_performance_report(trader: MockTrader,
-                               portfolio_history: List[Dict],
-                               benchmark_returns: Optional[pd.Series] = None) -> Dict[str, Any]:
+def generate_performance_report(
+    trader: MockTrader,
+    portfolio_history: List[Dict],
+    benchmark_returns: Optional[pd.Series] = None,
+    periods_per_year: Optional[int] = None,
+    benchmark_total_return: Optional[float] = None,
+) -> Dict[str, Any]:
     """
-    Generate comprehensive performance report.
-    
-    Args:
-        trader: MockTrader instance
-        portfolio_history: List of portfolio snapshots
-        benchmark_returns: Optional benchmark returns for comparison
-        
-    Returns:
-        Dictionary containing all performance metrics:
-        - total_return
-        - annualized_return
-        - volatility
-        - sharpe_ratio
-        - sortino_ratio
-        - max_drawdown
-        - win_rate
-        - profit_factor
-        - total_trades
-        - etc.
+    Generate comprehensive performance report with frequency-aware annualization.
     """
     if len(portfolio_history) == 0:
         return {}
-    
-    # Convert portfolio history to DataFrame
+
     df = pd.DataFrame(portfolio_history)
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    df = df.sort_values('timestamp')
-    
-    # Calculate returns
-    portfolio_values = df['total_value']
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df = df.sort_values("timestamp")
+
+    portfolio_values = df["total_value"]
     returns = portfolio_values.pct_change().dropna()
-    
-    # Basic metrics
+
+    ppy = resolve_periods_per_year(portfolio_history, override=periods_per_year)
+
     initial_value = trader.initial_cash
-    final_value = portfolio_values.iloc[-1]
+    final_value = float(portfolio_values.iloc[-1])
     total_return = calculate_total_return(initial_value, final_value)
-    
-    # Risk metrics
+
     if len(returns) > 0:
-        annualized_return = calculate_annualized_return(returns)
-        volatility = calculate_volatility(returns)
-        sharpe_ratio = calculate_sharpe_ratio(returns)
-        sortino_ratio = calculate_sortino_ratio(returns)
+        annualized_return = calculate_annualized_return(returns, periods_per_year=ppy)
+        volatility = calculate_volatility(returns, periods_per_year=ppy)
+        sharpe_ratio = calculate_sharpe_ratio(returns, periods_per_year=ppy)
+        sortino_ratio = calculate_sortino_ratio(returns, periods_per_year=ppy)
     else:
         annualized_return = 0.0
         volatility = 0.0
         sharpe_ratio = 0.0
         sortino_ratio = 0.0
-    
-    # Drawdown
+
     max_dd, peak_date, trough_date = calculate_max_drawdown(portfolio_values)
-    
-    # Trade metrics
+
     trades = trader.get_trade_history()
     win_rate = calculate_win_rate(trades)
     profit_factor = calculate_profit_factor(trades)
-    
-    report = {
-        'total_return': total_return,
-        'annualized_return': annualized_return,
-        'volatility': volatility,
-        'sharpe_ratio': sharpe_ratio,
-        'sortino_ratio': sortino_ratio,
-        'max_drawdown': max_dd * 100,  # Convert to percentage
-        'max_drawdown_peak_date': peak_date,
-        'max_drawdown_trough_date': trough_date,
-        'win_rate': win_rate,
-        'profit_factor': profit_factor,
-        'total_trades': len(trades),
-        'initial_cash': initial_value,
-        'final_value': final_value,
-        'cash_balance': trader.get_cash_balance(),
-        'num_positions': len(trader.get_positions()),
-        'periods': len(portfolio_history)
+
+    report: Dict[str, Any] = {
+        "total_return": total_return,
+        "annualized_return": annualized_return,
+        "volatility": volatility,
+        "sharpe_ratio": sharpe_ratio,
+        "sortino_ratio": sortino_ratio,
+        "max_drawdown": max_dd * 100,
+        "max_drawdown_peak_date": peak_date,
+        "max_drawdown_trough_date": trough_date,
+        "win_rate": win_rate,
+        "profit_factor": profit_factor,
+        "total_trades": len(trades),
+        "initial_cash": initial_value,
+        "final_value": final_value,
+        "cash_balance": trader.get_cash_balance(),
+        "num_positions": len(trader.get_positions()),
+        "periods": len(portfolio_history),
+        "periods_per_year": ppy,
+        "bar_frequency": format_frequency_label(ppy),
     }
-    
-    # Add benchmark comparison if provided
+
+    if benchmark_total_return is not None:
+        report["buy_hold_return"] = benchmark_total_return
+        report["excess_return_vs_buy_hold"] = total_return - benchmark_total_return
+
     if benchmark_returns is not None and len(benchmark_returns) > 0:
-        benchmark_total_return = calculate_total_return(
-            benchmark_returns.iloc[0] if isinstance(benchmark_returns, pd.Series) else benchmark_returns[0],
-            benchmark_returns.iloc[-1] if isinstance(benchmark_returns, pd.Series) else benchmark_returns[-1]
+        legacy_benchmark = calculate_total_return(
+            float(benchmark_returns.iloc[0]),
+            float(benchmark_returns.iloc[-1]),
         )
-        report['benchmark_return'] = benchmark_total_return
-        report['excess_return'] = total_return - benchmark_total_return
-    
+        report["benchmark_return"] = legacy_benchmark
+        report["excess_return"] = total_return - legacy_benchmark
+
     return report
 
 
@@ -376,5 +364,6 @@ def plot_performance_metrics(portfolio_history: List[Dict],
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"Plot saved to {save_path}")
-    
-    plt.show()
+        plt.close(fig)
+    else:
+        plt.show()

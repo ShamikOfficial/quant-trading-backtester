@@ -1,311 +1,200 @@
 # Quant Trading Backtester
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.8+-blue?style=flat-square&logo=python&logoColor=white)]()
+[![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat-square&logo=python&logoColor=white)]()
+[![Tests](https://img.shields.io/badge/tests-pytest-green?style=flat-square)](tests/)
 
-> End-to-end algorithmic trading pipeline — data collection, XGBoost signals, backtesting, and performance analytics.
+> End-to-end quantitative trading research pipeline: market data → features → XGBoost signals → commission-aware simulation → risk metrics **vs buy-and-hold**.
 
----
+**One-command demo (no API key):**
 
-## Problem
-
-Building a quantitative trading strategy requires more than a model — you need reliable data ingestion, feature engineering, signal generation, simulated execution, and rigorous performance evaluation in one reproducible pipeline.
-
-## Solution
-
-A modular Python framework implementing the **Signal → Order → Execute** flow with technical indicators, XGBoost-based ML strategies, and comprehensive backtesting metrics (Sharpe, Sortino, drawdown).
-
-## Key Results
-
-| Component | Capability |
-|-----------|------------|
-| Data collection | API ingestion with checkpoint/resume |
-| Strategies | Technical indicators + XGBoost ML models |
-| Backtesting | Sharpe, Sortino, drawdown analysis |
-| Architecture | Modular `src/` pipeline |
+```bash
+pip install -r requirements.txt
+python main.py demo --plot
+```
 
 ---
 
-## Features
+## Why this project exists
 
-- **Data Collection**: Automated data collection from APIs with checkpoint/resume capability
-- **Data Processing**: Cleaning, normalization, and feature engineering
-- **Trading Strategies**: Technical indicators and ML-based strategies (XGBoost)
-- **Backtesting**: Comprehensive backtesting framework with performance metrics
-- **Performance Analytics**: Sharpe ratio, Sortino ratio, drawdown analysis, and more
+Most “algo trading” GitHub repos train on the full history, skip transaction costs, and report Sharpe with the wrong annualization. This repo is built to be **interview-defensible**:
+
+| Practice | What we do |
+|----------|------------|
+| Time-series split | Chronological train/test only |
+| Label leakage | Embargo / purge gap between train and test |
+| Evaluation | Backtest **only** on the held-out window |
+| Baseline | Buy-and-hold on the **same** window + commission |
+| Risk metrics | Sharpe/Sortino/vol use **bar-frequency-aware** annualization |
+| Features | Metadata / raw OHLC excluded from the model matrix |
+
+See [docs/methodology.md](docs/methodology.md) for the full design notes.
+
+---
+
+## Sample held-out results (demo run)
+
+Reproduced with `python main.py demo --period 2y` on AAPL / MSFT / GOOGL / JPM / XOM (daily bars via Yahoo Finance). Evaluation window ≈ Feb 2026 → Sep 2026.
+
+| Ticker | Strategy return | Buy & hold | Excess vs B&H | Sharpe | Max DD | Dir. hit rate | Trades |
+|--------|-----------------|------------|---------------|--------|--------|---------------|--------|
+| AAPL | 0.00% | 18.61% | −18.61% | 0.00 | 0.00% | 48.9% | 0 |
+| MSFT | 0.91% | 25.41% | −24.50% | 1.25 | 0.51% | 51.1% | 12 |
+| GOOGL | 0.77% | 7.09% | −6.32% | 1.39 | 0.96% | 51.9% | 17 |
+| JPM | 1.54% | 18.01% | −16.47% | 2.45 | 0.52% | 51.9% | 8 |
+| XOM | 9.64% | 11.75% | −2.10% | 1.15 | 10.84% | 53.4% | 59 |
+
+**Takeaway for recruiters:** out-of-sample next-day return models on liquid large-caps are hard — hit rates hover near 50% and the strategy often **underperforms buy-and-hold**. That is expected. The showcase is the **evaluation discipline**, not fabricated alpha.
+
+Full JSON: [`docs/sample_results/latest_demo_summary.json`](docs/sample_results/latest_demo_summary.json) · equity plots in `docs/sample_results/`.
+
+![Example equity / drawdown panel](docs/sample_results/demo_XOM_equity.png)
+
+---
 
 ## Architecture
 
-The system follows a modular architecture with the **Signal → Order → Execute** flow:
-
+```text
+Data Layer          Signal Engine           Execution              Analytics
+-----------         -------------           ---------              ---------
+yfinance daily  →   technical features  →   MockTrader         →   Sharpe / Sortino
+Polygon minute  →   XGBoost return pred →   commission fills   →   max drawdown
+checkpointed ETL →  confidence gate     →   position sizing    →   vs buy-and-hold
 ```
-Data Layer → Signal Engine → Order Management → Execution → Analytics
+
+```mermaid
+flowchart LR
+    A[Market data] --> B[Feature engineering]
+    B --> C[XGBoost next-bar return]
+    C --> D{Confidence gate}
+    D -->|trade| E[MockTrader]
+    D -->|hold| F[Mark-to-market]
+    E --> F
+    F --> G[Performance report]
+    G --> H[Buy-and-hold baseline]
 ```
 
-### Components
+---
 
-- **Data Layer** (`src/data_loader.py`): Data loading, cleaning, and preprocessing
-- **Signal Engine** (`src/strategies/`): Strategy implementations (technical indicators, ML models)
-- **Mock Environment** (`src/simulator.py`): Portfolio and trade execution simulation
-- **Analytics** (`src/evaluator.py`): Performance metrics and evaluation
+## Quick start
 
-## Installation
+### 1. Setup
 
-### Prerequisites
-
-- Python 3.8 or higher
-- pip package manager
-
-### Setup
-
-1. Clone the repository:
 ```bash
-git clone <repository-url>
-cd LAB4-Algorithmic-Trading
-```
+git clone https://github.com/ShamikOfficial/quant-trading-backtester.git
+cd quant-trading-backtester
+python -m venv .venv
 
-2. Create and activate virtual environment:
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
 
-**Windows:**
-```powershell
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-```
+# macOS / Linux
+# source .venv/bin/activate
 
-**Linux/Mac:**
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-3. Install dependencies:
-```bash
-pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## Quick Start
-
-### 1. Stock Selection
-
-Select stocks from S&P 500 with equal sector representation:
+### 2. Run the demo (recommended)
 
 ```bash
-python src/stock_selector.py --n-stocks 20 --output-dir data/selections
+python main.py demo --plot
+# or: python run_demo.py --plot
 ```
 
-### 2. Data Collection
+This will:
 
-Collect raw market data (requires API credentials):
+1. Download ~2y of daily OHLCV for 5 liquid tickers (no API key)
+2. Engineer technical features
+3. Train per-ticker XGBoost with a **70/30 chronological split + embargo**
+4. Backtest **only** on the held-out window
+5. Compare each ticker to buy-and-hold
+6. Write `docs/sample_results/latest_demo_summary.json` (+ optional plots)
+
+### 3. Run tests
 
 ```bash
-# Set API credentials
-export API_BASE=https://api.polygon.io
-export API_KEY=YOUR_API_KEY
+pytest -q
+```
 
-# Collect raw data
-python run_data_collection.py --collect-raw \
+---
+
+## Advanced: Polygon minute-bar pipeline
+
+For higher-frequency research (original course/lab path):
+
+```bash
+cp .env.example .env   # set API_BASE + API_KEY
+
+# Sector-balanced S&P selection
+python src/stock_selector.py --n-stocks 20 --output-dir data/selections
+
+# Collect + process with checkpoint/resume
+python run_data_collection.py --full \
   --selection-file data/selections/selected_stocks_20_*.json \
   --n-weekdays 60 --bar-minutes 1
-```
 
-### 3. Data Processing
-
-Process raw data to add technical indicators:
-
-```bash
-python run_data_collection.py --process
-```
-
-### 4. Model Training
-
-Train XGBoost models on processed data:
-
-```bash
-python run_ml_training.py --processed-file "data/processed/processed_*.csv" --mode train-all
-```
-
-### 5. Backtesting
-
-Run backtests using trained models:
-
-```bash
-python run_backtest.py --processed-file "data/processed/processed_*.csv" \
-  --ticker AVGO --initial-cash 1000000 --plot
-```
-
-## Usage
-
-### Stock Selection
-
-Select stocks with equal sector representation from S&P 500:
-
-```bash
-python src/stock_selector.py --n-stocks 20 --output-dir data/selections
-```
-
-The selection is saved as a JSON file in the specified directory.
-
-### Data Collection
-
-The data collection system supports checkpoint/resume functionality:
-
-```bash
-# Collect raw data with checkpoint support
-python run_data_collection.py --collect-raw \
-  --selection-file data/selections/selected_stocks_20_*.json \
-  --n-weekdays 60 --bar-minutes 1 \
-  --api-base https://api.polygon.io --api-key YOUR_API_KEY
-
-# Process raw data
-python run_data_collection.py --process
-
-# Check status
-python run_data_collection.py --status
-
-# Clear checkpoints
-python run_data_collection.py --clear-checkpoints
-```
-
-**API Credentials**: Set via environment variables or command-line arguments:
-```bash
-export API_BASE=https://api.polygon.io
-export API_KEY=YOUR_API_KEY
-```
-
-### Model Training
-
-Train XGBoost models on processed data:
-
-```bash
-# Train models for all tickers
+# Train
 python run_ml_training.py --processed-file "data/processed/processed_*.csv" --mode train-all
 
-# Train model for specific ticker
-python run_ml_training.py --processed-file "data/processed/processed_*.csv" \
-  --mode train --ticker AVGO
-
-# Generate predictions
-python run_ml_training.py --processed-file "data/processed/processed_*.csv" \
-  --mode predict --ticker AVGO
+# Backtest (prefer restricting to a held-out date range)
+python run_backtest.py --processed-file "data/processed/processed_*.csv" \
+  --ticker AVGO --start-date YYYY-MM-DD --plot
 ```
 
-### Backtesting
-
-Run backtests with various configurations:
+Unified CLI:
 
 ```bash
-# Single ticker backtest
-python run_backtest.py --processed-file "data/processed/processed_*.csv" \
-  --ticker AVGO --initial-cash 1000000
-
-# Multiple tickers
-python run_backtest.py --processed-file "data/processed/processed_*.csv" \
-  --tickers AVGO HRL GL --initial-cash 1000000
-
-# With date range and custom parameters
-python run_backtest.py --processed-file "data/processed/processed_*.csv" \
-  --ticker AVGO --start-date 2024-10-01 --end-date 2024-12-31 \
-  --min-confidence 0.7 --lookback-window 20 --plot
+python main.py collect --help
+python main.py train --help
+python main.py backtest --help
 ```
 
-Results are saved to `backtest_results/` directory in JSON format.
+---
 
-## Programmatic Usage
+## Repository layout
 
-### Data Collection
-
-```python
-from run_data_collection import DataCollectionRunner
-
-runner = DataCollectionRunner(
-    api_base="https://api.polygon.io",
-    api_key="your_api_key"
-)
-
-# Collect raw data
-raw_data = runner.collect_raw_data(
-    tickers=['AAPL', 'MSFT', 'GOOGL'],
-    n_weekdays=60,
-    bar_minutes=1,
-    resume=True
-)
-
-# Process data
-processed_data = runner.process_data(resume=True)
-```
-
-### Model Training
-
-```python
-from src.strategies.ml_models import train_model_on_processed_data
-
-model, metrics = train_model_on_processed_data(
-    processed_file='data/processed/processed_*.csv',
-    ticker='AVGO',
-    lookback_window=10,
-    save_model_path='models/model_AVGO.pkl'
-)
-```
-
-### Backtesting
-
-```python
-from run_backtest import run_backtest_ml
-
-result = run_backtest_ml(
-    processed_file='data/processed/processed_*.csv',
-    ticker='AVGO',
-    initial_cash=1000000.0,
-    model_dir='models',
-    min_confidence=0.6
-)
-
-report = result['report']
-print(f"Total Return: {report['total_return']:.2f}%")
-print(f"Sharpe Ratio: {report['sharpe_ratio']:.4f}")
-```
-
-## Directory Structure
-
-```
-LAB4-Algorithmic-Trading/
-├── data/
-│   ├── raw/                    # Raw market data
-│   ├── processed/              # Processed data with features
-│   └── selections/             # Stock selection files
-├── checkpoints/                # Checkpoint files for resume
-├── models/                     # Trained ML models
-├── backtest_results/           # Backtest results and plots
+```text
+quant-trading-backtester/
+├── main.py                 # Unified CLI (demo | collect | train | backtest)
+├── run_demo.py             # Zero-config yfinance demo
+├── run_data_collection.py  # Polygon ETL + checkpoints
+├── run_ml_training.py      # XGBoost training
+├── run_backtest.py         # Simulation + plots
 ├── src/
-│   ├── data_loader.py         # Data loading and preprocessing
-│   ├── simulator.py           # Mock trading simulator
-│   ├── evaluator.py           # Performance metrics
-│   ├── stock_selector.py      # Stock selection from S&P 500
-│   └── strategies/
-│       ├── base_strategy.py   # Base strategy class
-│       ├── technical_indicators.py  # Technical analysis indicators
-│       └── ml_models.py       # XGBoost ML models
-├── run_data_collection.py     # Data collection runner
-├── run_ml_training.py         # ML model training script
-├── run_backtest.py            # Backtesting script
-├── main.py                    # Main entry point
-├── requirements.txt           # Python dependencies
-└── README.md                  # This file
+│   ├── data_loader.py      # API / CSV load, RTH clean, features
+│   ├── yfinance_loader.py  # Public daily data for demos
+│   ├── simulator.py        # MockTrader (cash, positions, commission)
+│   ├── evaluator.py        # Sharpe, Sortino, drawdown, reports
+│   ├── benchmark.py        # Buy-and-hold baseline
+│   ├── frequency.py        # Bar-frequency annualization
+│   ├── columns.py          # Feature hygiene helpers
+│   ├── stock_selector.py   # Sector-balanced S&P sampling
+│   └── strategies/         # Technical + ML strategies
+├── docs/
+│   ├── methodology.md
+│   └── sample_results/     # Checked-in demo summary + plots
+├── data/sample/            # Demo datasets (generated locally)
+├── tests/                  # Smoke tests
+├── .env.example
+└── requirements.txt
 ```
 
-## Performance Metrics
+---
 
-The system calculates comprehensive performance metrics:
+## Resume talking points
 
-- **Total Return**: Overall portfolio return percentage
-- **Annualized Return**: Annualized return rate
-- **Sharpe Ratio**: Risk-adjusted return metric
-- **Sortino Ratio**: Downside risk-adjusted return
-- **Maximum Drawdown**: Largest peak-to-trough decline
-- **Volatility**: Annualized standard deviation of returns
-- **Win Rate**: Percentage of profitable trades
-- **Profit Factor**: Ratio of gross profit to gross loss
+- Built a modular **Signal → Order → Execute** backtester with commission-aware fills and portfolio snapshots.
+- Enforced **chronological train/test splits with an embargo gap** and reported **direction hit rate** alongside R² (which is often negative OOS on noisy returns — by design we still show it).
+- Compared every strategy run to a **same-window buy-and-hold** baseline so “alpha” claims are falsifiable.
+- Shipped a **one-command, API-key-free demo** so recruiters can reproduce results without Polygon credentials.
+
+---
+
+## Disclaimer
+
+This software is for research and education. It is **not** investment advice and is not a production trading system (no live broker integration, limited slippage modeling).
+
+---
 
 ## License
 
@@ -313,4 +202,4 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-*Originally developed as USC DSCI 560 coursework — refactored for clarity and portfolio presentation.*
+*Originally developed as USC DSCI 560 coursework; reworked into a portfolio research framework with a reproducible public demo.*

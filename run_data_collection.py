@@ -378,7 +378,7 @@ class DataCollectionRunner:
         # Raw collection status
         if status['raw_collection']:
             raw = status['raw_collection']
-            print("\n📥 Raw Data Collection:")
+            print("\nRaw Data Collection:")
             print(f"  Completed tickers: {len(raw.get('completed_tickers', []))} / {raw.get('total_tickers', 0)}")
             if raw.get('completed_tickers'):
                 print(f"  Tickers: {raw['completed_tickers']}")
@@ -388,7 +388,7 @@ class DataCollectionRunner:
                 print(f"  Last error: {raw['last_error']}")
                 print(f"  Failed at ticker: {raw.get('failed_ticker', 'Unknown')}")
         else:
-            print("\n📥 Raw Data Collection: Not started")
+            print("\nRaw Data Collection: Not started")
         
         # Processing status
         if status['processing']:

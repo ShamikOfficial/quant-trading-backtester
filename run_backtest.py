@@ -9,8 +9,10 @@ import json
 
 from src.simulator import MockTrader
 from src.evaluator import generate_performance_report, plot_performance_metrics
+from src.benchmark import buy_and_hold_return
 from src.strategies.ml_models import XGBoostModel, load_processed_data, find_processed_file
 from src.strategies.ml_models import MLStrategy
+from src.frequency import infer_periods_per_year
 
 
 def load_model_for_ticker(ticker: str, model_dir: str = "models") -> Optional[XGBoostModel]:
@@ -31,7 +33,8 @@ def run_backtest_ml(processed_file: str,
                     lookback_window: int = 10,
                     min_confidence: float = 0.6,
                     start_date: Optional[str] = None,
-                    end_date: Optional[str] = None) -> Dict:
+                    end_date: Optional[str] = None,
+                    bar_type: str = "minute") -> Dict:
     # Run backtest using saved ML model
     print(f"\n{'='*60}")
     print(f"Running Backtest for {ticker}")
@@ -69,7 +72,8 @@ def run_backtest_ml(processed_file: str,
         name=f"MLStrategy_{ticker}",
         parameters={
             'lookback_window': lookback_window,
-            'min_confidence': min_confidence
+            'min_confidence': min_confidence,
+            'bar_type': bar_type,
         }
     )
     strategy.model = model
@@ -90,10 +94,13 @@ def run_backtest_ml(processed_file: str,
     # Optimization: process every N minutes to speed up (adjust step_size as needed)
     # step_size = 1 means every minute, step_size = 5 means every 5 minutes
     # Use larger step size for faster processing (max 5000 iterations)
-    step_size = max(1, int(len(data) / 5000))  # Auto-adjust: max 5k iterations
+    if bar_type == "daily":
+        step_size = 1
+    else:
+        step_size = max(1, int(len(data) / 5000))  # Auto-adjust: max 5k iterations
     snapshot_frequency = max(1, step_size * 10)  # Record snapshot every 10 steps
     
-    print(f"Using step size: {step_size} (processing every {step_size} minute(s))")
+    print(f"Using step size: {step_size} (processing every {step_size} bar(s))")
     print(f"Snapshot frequency: every {snapshot_frequency} periods")
     
     for i in range(chunk_size, len(data), step_size):
@@ -148,21 +155,32 @@ def run_backtest_ml(processed_file: str,
     final_price = data.iloc[-1]['close']
     trader.record_portfolio_snapshot(final_timestamp, {ticker: final_price})
     
+    # Buy-and-hold benchmark on the same evaluation window
+    bh = buy_and_hold_return(data['close'], initial_cash=initial_cash)
+    ppy = infer_periods_per_year(data['datetime_et'])
+
     # Generate performance report
     print(f"\nGenerating performance report...")
-    report = generate_performance_report(trader, trader.portfolio_history)
+    report = generate_performance_report(
+        trader,
+        trader.portfolio_history,
+        periods_per_year=ppy,
+        benchmark_total_return=bh['buy_hold_return'],
+    )
     
     # Add additional info
     report['ticker'] = ticker
     report['strategy'] = strategy.name
     report['data_periods'] = len(data)
     report['trades_executed'] = len(trader.get_trade_history())
+    report['bar_type'] = bar_type
     
     return {
         'trader': trader,
         'strategy': strategy,
         'report': report,
-        'portfolio_history': trader.portfolio_history
+        'portfolio_history': trader.portfolio_history,
+        'buy_hold': bh,
     }
 
 
@@ -216,6 +234,8 @@ def main():
                        help='Directory to save results')
     parser.add_argument('--plot', action='store_true',
                        help='Generate performance plots')
+    parser.add_argument('--bar-type', type=str, default='minute', choices=['minute', 'daily'],
+                       help='Bar frequency (affects signal thresholds and step size)')
     
     args = parser.parse_args()
     
@@ -263,7 +283,8 @@ def main():
             lookback_window=args.lookback_window,
             min_confidence=args.min_confidence,
             start_date=args.start_date,
-            end_date=args.end_date
+            end_date=args.end_date,
+            bar_type=args.bar_type,
         )
         
         # Print report
@@ -302,7 +323,8 @@ def main():
             lookback_window=args.lookback_window,
             min_confidence=args.min_confidence,
             start_date=args.start_date,
-            end_date=args.end_date
+            end_date=args.end_date,
+            bar_type=args.bar_type,
         )
         
         # Print summary

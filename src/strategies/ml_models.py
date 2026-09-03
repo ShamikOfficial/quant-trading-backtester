@@ -6,6 +6,7 @@ import pickle
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 from src.strategies.base_strategy import BaseStrategy
+from src.columns import feature_columns, METADATA_COLS, PRICE_COLS
 
 try:
     from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -113,11 +114,12 @@ class XGBoostModel:
             if f'returns_lag_{lag}' not in df.columns:
                 df[f'returns_lag_{lag}'] = df['returns'].shift(lag)
         
-        # Drop rows with NaN values (but keep non-feature columns)
-        feature_cols = [col for col in df.columns 
-                        if col not in ['ticker', 'datetime_et', 'datetime_utc', 'date_et']]
-        df = df.dropna(subset=feature_cols)
-        
+        # Drop rows with NaN values on numeric feature columns only
+        feature_cols = feature_columns(df.columns)
+        # also require OHLC notnan for trading
+        subset = [c for c in feature_cols + ["close"] if c in df.columns]
+        df = df.dropna(subset=subset)
+
         return df
     
     def prepare_target(self, data: pd.DataFrame, 
@@ -193,11 +195,9 @@ class XGBoostModel:
         
         # Align and split data
         aligned_data = pd.concat([features_df, target], axis=1).dropna()
-        
-        # Select feature columns (exclude target and original price columns)
-        feature_cols = [col for col in aligned_data.columns 
-                       if col not in ['close', 'open', 'high', 'low', 'volume', target_name]]
-        
+
+        feature_cols = feature_columns(aligned_data.columns)
+
         X = aligned_data[feature_cols]
         y = aligned_data[target_name]
         
@@ -264,6 +264,14 @@ class MLStrategy(BaseStrategy):
         self.learning_rate = self.parameters.get('learning_rate', 0.1)
         self.lookback_window = self.parameters.get('lookback_window', 10)
         self.min_confidence = self.parameters.get('min_confidence', 0.6)
+        # Daily bars have larger returns than minute bars — scale thresholds accordingly
+        self.bar_type = self.parameters.get('bar_type', 'minute')  # 'minute' | 'daily'
+        if self.bar_type == 'daily':
+            self.prediction_threshold = self.parameters.get('prediction_threshold', 0.001)
+            self.confidence_scale = self.parameters.get('confidence_scale', 40.0)
+        else:
+            self.prediction_threshold = self.parameters.get('prediction_threshold', 0.00005)
+            self.confidence_scale = self.parameters.get('confidence_scale', 300.0)
         
         # Initialize model
         self.model = XGBoostModel(
@@ -292,88 +300,66 @@ class MLStrategy(BaseStrategy):
                 return {'action': 'HOLD', 'confidence': 0.0, 'reason': 'No features available'}
             
             # Get latest features for prediction
-            feature_cols = [col for col in features_df.columns 
-                           if col not in ['close', 'open', 'high', 'low', 'volume']]
-            
+            feature_cols = feature_columns(features_df.columns)
+
             if not feature_cols:
                 return {'action': 'HOLD', 'confidence': 0.0, 'reason': 'No valid features'}
-            
+
             X_latest = features_df[feature_cols].iloc[-1:]
-            
+
             # Train model if not trained (skip if model is already loaded and trained)
             # Check if model has been fitted (for loaded models)
             model_is_fitted = hasattr(self.model, 'fitted') and self.model.fitted
             if (not self.model_trained or self.training_data is None) and not model_is_fitted:
                 self.training_data = data.copy()
                 target = self.model.prepare_target(data, target_type='returns')
-                
-                # Ensure target is a Series and rename to avoid conflicts
+
                 if not isinstance(target, pd.Series):
                     raise ValueError(f"prepare_target returned {type(target)}, expected Series")
                 target_name = 'target_returns'
                 target = target.rename(target_name)
-                
+
                 aligned_data = pd.concat([features_df, target], axis=1).dropna()
-                
-                if len(aligned_data) > 20:  # Need minimum data for training
+
+                if len(aligned_data) > 20:
                     X_train = aligned_data[feature_cols].iloc[:-1]
                     y_train = aligned_data[target_name].iloc[:-1]
                     self.model.fit(X_train, y_train)
                     self.model_trained = True
-            
+
             # Make prediction
             if self.model_trained:
                 # Ensure feature columns match model's expected features
                 if hasattr(self.model, 'feature_names') and self.model.feature_names:
-                    # Check for missing features
                     missing_features = set(self.model.feature_names) - set(X_latest.columns)
                     extra_features = set(X_latest.columns) - set(self.model.feature_names)
-                    
+
                     if missing_features:
-                        # Add missing features with 0 values (or forward fill from available data)
                         for feat in missing_features:
                             X_latest[feat] = 0.0
-                    
-                    # Remove extra features that model doesn't expect
+
                     if extra_features:
                         X_latest = X_latest.drop(columns=list(extra_features))
-                    
-                    # Reorder to match model's feature order
+
                     X_latest = X_latest[self.model.feature_names]
-                
+
                 try:
                     pred_array = self.model.predict(X_latest)
                     if len(pred_array) > 0:
                         prediction = float(pred_array[0])
                     else:
                         prediction = 0.0
-                    # Handle NaN or invalid predictions
                     if pd.isna(prediction) or not isinstance(prediction, (int, float)):
                         prediction = 0.0
                 except Exception as e:
-                    # If prediction fails, return HOLD with error reason
-                    import traceback
                     error_msg = f'Prediction error: {str(e)}'
-                    # Uncomment for debugging: print(f"Prediction error: {error_msg}\n{traceback.format_exc()}")
                     return {'action': 'HOLD', 'confidence': 0.0, 'reason': error_msg, 'predicted_return': 0.0}
-                
-                current_price = data['close'].iloc[-1]
-                
-                # Convert prediction to signal
-                # Positive prediction = buy, negative = sell
-                # Predictions are returns (typically 0.0001 to 0.01 range for minute-level data)
-                # Use very low threshold since returns are small
-                prediction_threshold = 0.00005  # Very low threshold (0.005% return)
-                
-                # Calculate confidence: use absolute prediction value
-                # Scale predictions (which are typically 0.0001-0.01) to 0-1 confidence range
-                # A prediction of 0.001 (0.1% return) should give decent confidence
+
+                prediction_threshold = self.prediction_threshold
                 abs_pred = abs(prediction)
-                # Use sigmoid-like scaling: confidence increases with prediction magnitude
-                # Scale so that 0.001 = ~0.3 confidence, 0.01 = ~0.9 confidence
-                confidence = min(abs_pred * 300, 1.0)  # 0.001 * 300 = 0.3, 0.01 * 300 = 3.0 -> capped at 1.0
-                
-                if prediction > prediction_threshold:  # Positive expected return threshold
+                confidence = min(abs_pred * self.confidence_scale, 1.0)
+
+                if prediction > prediction_threshold:
                     if confidence >= self.min_confidence:
                         signal = {
                             'action': 'BUY',
@@ -383,8 +369,8 @@ class MLStrategy(BaseStrategy):
                         }
                     else:
                         signal = {'action': 'HOLD', 'confidence': confidence, 'predicted_return': prediction}
-                
-                elif prediction < -prediction_threshold:  # Negative expected return threshold
+
+                elif prediction < -prediction_threshold:
                     if confidence >= self.min_confidence:
                         signal = {
                             'action': 'SELL',
@@ -395,16 +381,15 @@ class MLStrategy(BaseStrategy):
                     else:
                         signal = {'action': 'HOLD', 'confidence': confidence, 'predicted_return': prediction}
                 else:
-                    # Prediction is too small, but still include it for debugging
                     signal = {
-                        'action': 'HOLD', 
-                        'confidence': confidence,  # Use calculated confidence even if below threshold
+                        'action': 'HOLD',
+                        'confidence': confidence,
                         'predicted_return': prediction,
                         'reason': f'Prediction {prediction:.6f} below threshold {prediction_threshold}'
                     }
             else:
                 signal = {'action': 'HOLD', 'confidence': 0.0, 'reason': 'Model not trained'}
-            
+
             self.signals_history.append(signal)
             return signal
             
@@ -493,12 +478,11 @@ class MLStrategy(BaseStrategy):
         aligned_data = pd.concat([features_df, target], axis=1).dropna()
         
         if len(aligned_data) > 20:
-            feature_cols = [col for col in aligned_data.columns 
-                           if col not in ['close', 'open', 'high', 'low', 'volume', target_name]]
-            
+            feature_cols = feature_columns(aligned_data.columns)
+
             X_train = aligned_data[feature_cols].iloc[:-1]
             y_train = aligned_data[target_name].iloc[:-1]
-            
+
             self.model.fit(X_train, y_train)
             self.model_trained = True
 
@@ -576,70 +560,66 @@ def train_model_on_processed_data(processed_file: str,
                                   ticker: Optional[str] = None,
                                   lookback_window: int = 10,
                                   train_test_split: float = 0.8,
+                                  embargo_periods: int = 5,
                                   model_params: Optional[Dict[str, Any]] = None,
                                   save_model_path: Optional[str] = None) -> Tuple[XGBoostModel, Dict[str, Any]]:
-    # Train XGBoost model on processed data
-    # Load data
+    # Train XGBoost model on processed data with chronological split + embargo gap
     data = load_processed_data(processed_file, ticker=ticker)
-    
+
     if len(data) < 100:
         raise ValueError(f"Insufficient data: {len(data)} rows. Need at least 100 rows.")
-    
-    # Initialize model
+
     if model_params is None:
         model_params = {}
-    
+
     model = XGBoostModel(**model_params)
-    
-    # Prepare features
+
     features_df = model.prepare_features(data, lookback_window)
-    
-    # Prepare target
     target = model.prepare_target(data, target_type='returns')
-    
-    # Ensure target is a Series with a unique name
+
     if not isinstance(target, pd.Series):
         raise ValueError(f"prepare_target returned {type(target)}, expected Series")
-    
-    # Rename target to avoid conflicts with existing columns
+
     target_name = 'target_returns'
     target = target.rename(target_name)
-    
-    # Align data by index
+
     aligned_data = pd.concat([features_df, target], axis=1).dropna()
-    
+
     if len(aligned_data) < 50:
         raise ValueError(f"Insufficient aligned data: {len(aligned_data)} rows after feature engineering.")
-    
-    # Select feature columns (exclude target and metadata columns)
-    feature_cols = [col for col in aligned_data.columns 
-                   if col not in ['close', 'open', 'high', 'low', 'volume', 'vwap', 'num_trades',
-                                 'ticker', 'datetime_et', 'datetime_utc', 'date_et', target_name]]
-    
+
+    feature_cols = feature_columns(aligned_data.columns)
+
     if not feature_cols:
         raise ValueError("No valid feature columns found")
-    
+
     X = aligned_data[feature_cols]
     y = aligned_data[target_name]
-    
-    # Split train/test
+
+    # Chronological split with embargo (purge gap) to reduce leakage from overlapping labels
     split_idx = int(len(X) * train_test_split)
-    X_train = X.iloc[:split_idx]
-    y_train = y.iloc[:split_idx]
-    X_test = X.iloc[split_idx:]
-    y_test = y.iloc[split_idx:]
-    
-    # Train model
-    print(f"Training model on {len(X_train)} samples...")
+    embargo = max(0, int(embargo_periods))
+    train_end = max(split_idx - embargo, int(len(X) * 0.5))
+    test_start = min(split_idx + embargo, len(X) - 10)
+
+    X_train = X.iloc[:train_end]
+    y_train = y.iloc[:train_end]
+    X_test = X.iloc[test_start:]
+    y_test = y.iloc[test_start:]
+
+    if len(X_train) < 30 or len(X_test) < 10:
+        raise ValueError(
+            f"Split too small after embargo (train={len(X_train)}, test={len(X_test)}). "
+            "Use more history or reduce --embargo-periods."
+        )
+
+    print(f"Training model on {len(X_train)} samples (embargo={embargo})...")
     model.fit(X_train, y_train)
-    
-    # Evaluate
+
     train_pred = model.predict(X_train)
     test_pred = model.predict(X_test)
-    
-    # Calculate metrics
+
     if mean_absolute_error is None:
-        # Fallback if sklearn not available
         train_mae = np.mean(np.abs(y_train - train_pred))
         test_mae = np.mean(np.abs(y_test - test_pred))
         train_rmse = np.sqrt(np.mean((y_train - train_pred) ** 2))
@@ -653,7 +633,17 @@ def train_model_on_processed_data(processed_file: str,
         test_rmse = np.sqrt(mean_squared_error(y_test, test_pred))
         train_r2 = r2_score(y_train, train_pred)
         test_r2 = r2_score(y_test, test_pred)
-    
+
+    # Directional hit rate on test (more meaningful than R^2 for noisy returns)
+    direction_hit = float(np.mean(np.sign(test_pred) == np.sign(y_test.values))) if len(y_test) else 0.0
+
+    test_start_ts = None
+    test_end_ts = None
+    if 'datetime_et' in aligned_data.columns:
+        test_slice = aligned_data.iloc[test_start:]
+        test_start_ts = str(test_slice['datetime_et'].iloc[0])
+        test_end_ts = str(test_slice['datetime_et'].iloc[-1])
+
     metrics = {
         'train_mae': train_mae,
         'test_mae': test_mae,
@@ -661,20 +651,28 @@ def train_model_on_processed_data(processed_file: str,
         'test_rmse': test_rmse,
         'train_r2': train_r2,
         'test_r2': test_r2,
+        'test_direction_hit_rate': direction_hit,
         'n_train': len(X_train),
         'n_test': len(X_test),
-        'n_features': len(feature_cols)
+        'n_features': len(feature_cols),
+        'embargo_periods': embargo,
+        'train_test_split': train_test_split,
+        'test_start': test_start_ts,
+        'test_end': test_end_ts,
+        'feature_names': feature_cols,
     }
-    
+
     print(f"\nModel Performance:")
     print(f"  Train MAE: {train_mae:.6f}, RMSE: {train_rmse:.6f}, R²: {train_r2:.4f}")
     print(f"  Test MAE:  {test_mae:.6f}, RMSE: {test_rmse:.6f}, R²: {test_r2:.4f}")
-    
-    # Save model if path provided
+    print(f"  Test direction hit rate: {direction_hit:.1%}")
+    if test_start_ts:
+        print(f"  Held-out window: {test_start_ts} -> {test_end_ts}")
+
     if save_model_path:
         model.save_model(save_model_path)
         print(f"\nModel saved to: {save_model_path}")
-    
+
     return model, metrics
 
 
@@ -697,10 +695,8 @@ def predict_from_processed_data(model: XGBoostModel,
         raise ValueError("No features available after preparation")
     
     # Get feature columns
-    feature_cols = [col for col in features_df.columns 
-                   if col not in ['close', 'open', 'high', 'low', 'volume', 'vwap', 'num_trades',
-                                 'ticker', 'datetime_et', 'datetime_utc', 'date_et']]
-    
+    feature_cols = feature_columns(features_df.columns)
+
     # Use last n_predictions rows for prediction
     X_predict = features_df[feature_cols].iloc[-n_predictions:]
     

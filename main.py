@@ -1,106 +1,86 @@
-# Main entry point for algorithmic trading pipeline
+"""
+Quant Trading Backtester — unified CLI entrypoint.
 
-import pandas as pd
-from datetime import datetime
-from typing import Dict, Optional, Any
+Examples:
+  python main.py demo
+  python main.py demo --tickers AAPL MSFT --plot
+  python main.py collect --help
+  python main.py train --help
+  python main.py backtest --help
+"""
 
-from src.data_loader import DataLoader
-from src.simulator import MockTrader
-from src.evaluator import generate_performance_report, calculate_sharpe_ratio
-from src.strategies.base_strategy import BaseStrategy
-from src.strategies.technical_indicators import TechnicalStrategy
-from src.strategies.ml_models import MLStrategy
+from __future__ import annotations
 
-
-def run_backtest(data_path: str,
-                 strategy: BaseStrategy,
-                 initial_cash: float = 100000.0,
-                 start_date: Optional[str] = None,
-                 end_date: Optional[str] = None) -> Dict[str, Any]:
-    # Run backtest simulation
-    from src.simulator import MockTrader
-    from src.evaluator import generate_performance_report
-    
-    # Load data
-    loader = DataLoader()
-    data = loader.load_csv(data_path)
-    cleaned_data = loader.clean_data()
-    
-    # Filter by date if provided
-    if start_date:
-        cleaned_data = cleaned_data[cleaned_data['datetime_et'] >= pd.to_datetime(start_date)]
-    if end_date:
-        cleaned_data = cleaned_data[cleaned_data['datetime_et'] <= pd.to_datetime(end_date)]
-    
-    # Initialize simulator
-    trader = MockTrader(initial_cash=initial_cash)
-    
-    # Get unique tickers
-    tickers = cleaned_data['ticker'].unique()
-    
-    # Run backtest for each ticker
-    for ticker in tickers:
-        ticker_data = cleaned_data[cleaned_data['ticker'] == ticker].sort_values('datetime_et')
-        
-        # Process data chronologically
-        lookback_window = 50  # Default lookback
-        for i in range(lookback_window, len(ticker_data)):
-            current_data = ticker_data.iloc[i-lookback_window:i+1]
-            current_row = ticker_data.iloc[i]
-            current_price = current_row['close']
-            timestamp = current_row['datetime_et']
-            
-            # Get current position
-            position = trader.get_position(ticker)
-            current_position = {
-                'symbol': ticker,
-                'quantity': position.quantity if position else 0,
-                'avg_cost': position.avg_cost if position else 0.0
-            }
-            
-            # Generate signal
-            signal = strategy.generate_signal(current_data, current_position)
-            
-            # Create and execute order
-            if signal['action'] != 'HOLD':
-                portfolio_state = {
-                    'symbol': ticker,
-                    'current_price': current_price,
-                    'cash': trader.get_cash_balance(),
-                    'positions': {ticker: current_position}
-                }
-                
-                order = strategy.create_order(signal, portfolio_state)
-                if order:
-                    trader.execute_order(order)
-            
-            # Update prices and record snapshot
-            trader.update_prices({ticker: current_price})
-            trader.record_portfolio_snapshot(timestamp, {ticker: current_price})
-    
-    # Generate performance report
-    report = generate_performance_report(trader, trader.portfolio_history)
-    
-    return {
-        'trader': trader,
-        'strategy': strategy,
-        'report': report,
-        'portfolio_history': trader.portfolio_history
-    }
+import argparse
+import sys
 
 
-def run_live_trading(data_source: str,
-                    strategy: BaseStrategy,
-                    initial_cash: float = 100000.0,
-                    update_interval: int = 60) -> None:
-    # Run live/real-time trading simulation
-    pass
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="quant-trading-backtester",
+        description="End-to-end quant trading pipeline: data → features → XGBoost → backtest.",
+    )
+    sub = parser.add_subparsers(dest="command")
 
+    demo = sub.add_parser("demo", help="Zero-config demo (yfinance, no API key)")
+    demo.add_argument("--tickers", nargs="+", default=None)
+    demo.add_argument("--period", default="2y")
+    demo.add_argument("--plot", action="store_true")
+    demo.add_argument("--min-confidence", type=float, default=0.35)
+    demo.add_argument("--embargo-periods", type=int, default=5)
+    demo.add_argument("--processed-file", default=None)
 
-def main():
-    # Main entry point for algorithmic trading system
-    pass
+    sub.add_parser("collect", help="Polygon/API data collection (see run_data_collection.py)")
+    sub.add_parser("train", help="Train models (see run_ml_training.py)")
+    sub.add_parser("backtest", help="Run backtests (see run_backtest.py)")
+
+    args, rest = parser.parse_known_args(argv)
+
+    if args.command is None:
+        parser.print_help()
+        print("\nTip: start with  python main.py demo")
+        return 0
+
+    if args.command == "demo":
+        from run_demo import main as demo_main
+
+        demo_argv = []
+        if args.tickers:
+            demo_argv += ["--tickers", *args.tickers]
+        demo_argv += ["--period", args.period]
+        demo_argv += ["--min-confidence", str(args.min_confidence)]
+        demo_argv += ["--embargo-periods", str(args.embargo_periods)]
+        if args.plot:
+            demo_argv.append("--plot")
+        if args.processed_file:
+            demo_argv += ["--processed-file", args.processed_file]
+        demo_argv += rest
+        return demo_main(demo_argv)
+
+    if args.command == "collect":
+        from run_data_collection import main as collect_main
+
+        sys.argv = ["run_data_collection.py", *rest]
+        collect_main()
+        return 0
+
+    if args.command == "train":
+        from run_ml_training import main as train_main
+
+        sys.argv = ["run_ml_training.py", *rest]
+        train_main()
+        return 0
+
+    if args.command == "backtest":
+        from run_backtest import main as backtest_main
+
+        sys.argv = ["run_backtest.py", *rest]
+        backtest_main()
+        return 0
+
+    parser.print_help()
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
